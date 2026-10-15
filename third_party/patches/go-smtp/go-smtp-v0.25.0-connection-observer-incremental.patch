@@ -1,0 +1,60 @@
+diff --git a/server.go b/server.go
+--- a/server.go
++++ b/server.go
+@@ -48,9 +48,9 @@
+ 	MaxLineLength     int
+ 	AllowInsecureAuth bool
+ 	Debug             io.Writer
+-	// TrafficObserver receives SMTP application bytes with explicit direction.
+-	// The callback is invoked synchronously; it must be concurrency-safe and fast.
+-	TrafficObserver func(direction TrafficDirection, data []byte)
++	// TrafficObserver receives SMTP application bytes, direction, and owning SMTP connection.
++	// The callback is invoked synchronously; it must be concurrency-safe and fast.
++	TrafficObserver func(conn *Conn, direction TrafficDirection, data []byte)
+ 	ErrorLog          Logger
+ 	ReadTimeout       time.Duration
+ 	WriteTimeout      time.Duration
+
+diff --git a/conn.go b/conn.go
+--- a/conn.go
++++ b/conn.go
+@@ -77,7 +77,7 @@
+ 			io.Closer
+ 		}{
+-			Reader: io.TeeReader(rwc.Reader, trafficObserverWriter{observer: observer, direction: TrafficClientToServer}),
+-			Writer: trafficObservedWriter{writer: rwc.Writer, observer: observer, direction: TrafficServerToClient},
++			Reader: io.TeeReader(rwc.Reader, trafficObserverWriter{observer: observer, conn: c, direction: TrafficClientToServer}),
++			Writer: trafficObservedWriter{writer: rwc.Writer, observer: observer, conn: c, direction: TrafficServerToClient},
+ 			Closer: rwc.Closer,
+ 		}
+ 	}
+@@ -99,12 +99,13 @@
+ }
+ 
+ type trafficObserverWriter struct {
+-	observer  func(direction TrafficDirection, data []byte)
++	observer  func(conn *Conn, direction TrafficDirection, data []byte)
++	conn      *Conn
+ 	direction TrafficDirection
+ }
+ 
+ func (w trafficObserverWriter) Write(p []byte) (int, error) {
+ 	data := append([]byte(nil), p...)
+-	w.observer(w.direction, data)
++	w.observer(w.conn, w.direction, data)
+ 	return len(p), nil
+ }
+@@ -111,5 +112,6 @@
+ type trafficObservedWriter struct {
+ 	writer    io.Writer
+-	observer  func(direction TrafficDirection, data []byte)
++	observer  func(conn *Conn, direction TrafficDirection, data []byte)
++	conn      *Conn
+ 	direction TrafficDirection
+ }
+@@ -120,4 +121,4 @@
+ 	if n > 0 {
+ 		data := append([]byte(nil), p[:n]...)
+-		w.observer(w.direction, data)
++		w.observer(w.conn, w.direction, data)
+ 	}

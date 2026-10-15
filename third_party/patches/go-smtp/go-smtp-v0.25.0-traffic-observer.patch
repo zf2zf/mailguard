@@ -1,0 +1,76 @@
+diff --git a/server.go b/server.go
+index 1111111..2222222 100644
+--- a/server.go
++++ b/server.go
+@@ -25,7 +25,18 @@ type Logger interface {
+ type Logger interface {
+ 	Printf(format string, v ...interface{})
+ 	Println(v ...interface{})
+ }
+ 
++// TrafficDirection identifies the direction of SMTP application bytes observed
++// at the protocol reader/writer boundary. These are plaintext bytes, including
++// SMTP commands, responses, and message transfer content. TLS ciphertext must
++// be captured separately at the underlying net.Conn boundary.
++type TrafficDirection string
++
++const (
++	TrafficClientToServer TrafficDirection = "client_to_server"
++	TrafficServerToClient TrafficDirection = "server_to_client"
++)
++
+ // A SMTP server.
+ type Server struct {
+@@ -40,3 +50,6 @@ AllowInsecureAuth bool
+ 	AllowInsecureAuth bool
+ 	Debug             io.Writer
++	// TrafficObserver receives SMTP application bytes with explicit direction.
++	// The callback is invoked synchronously; it must be concurrency-safe and fast.
++	TrafficObserver func(direction TrafficDirection, data []byte)
+ 	ErrorLog          Logger
+diff --git a/conn.go b/conn.go
+index 1111111..2222222 100644
+--- a/conn.go
++++ b/conn.go
+@@ -70,1 +70,13 @@ if c.server.Debug != nil {
++	if observer := c.server.TrafficObserver; observer != nil {
++		rwc = struct {
++			io.Reader
++			io.Writer
++			io.Closer
++		}{
++			Reader: io.TeeReader(rwc.Reader, trafficObserverWriter{observer: observer, direction: TrafficClientToServer}),
++			Writer: trafficObservedWriter{writer: rwc.Writer, observer: observer, direction: TrafficServerToClient},
++			Closer: rwc.Closer,
++		}
++	}
++
+ 	if c.server.Debug != nil {
+@@ -90,1 +104,27 @@ Commands are dispatched
++type trafficObserverWriter struct {
++	observer  func(direction TrafficDirection, data []byte)
++	direction TrafficDirection
++}
++
++func (w trafficObserverWriter) Write(p []byte) (int, error) {
++	data := append([]byte(nil), p...)
++	w.observer(w.direction, data)
++	return len(p), nil
++}
++
++type trafficObservedWriter struct {
++	writer    io.Writer
++	observer  func(direction TrafficDirection, data []byte)
++	direction TrafficDirection
++}
++
++func (w trafficObservedWriter) Write(p []byte) (int, error) {
++	n, err := w.writer.Write(p)
++	if n > 0 {
++		data := append([]byte(nil), p[:n]...)
++		w.observer(w.direction, data)
++	}
++	return n, err
++}
++
+ // Commands are dispatched to the appropriate handler functions.
