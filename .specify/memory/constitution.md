@@ -1,50 +1,158 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# MailShield 项目章程
 
-## Core Principles
+## 一、产品定位
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+MailShield 是使用 Go 语言开发的 SMTP 正向代理与流量采集系统。
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+邮件客户端保留现有邮箱账号、SMTP 服务器地址、端口及认证配置，仅额外配置 MailShield 代理。MailShield 根据客户端请求连接对应目标服务器，并转发 TCP 流量，支持多邮箱及多 SMTP 服务器。
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+第一阶段以 HTTP CONNECT 正向代理为核心。SOCKS5 属于后续扩展。不得擅自将产品改为 SMTP 会话终止、重建或中间人代理系统。
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+## 二、核心原则
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### I. 产品边界（Product Boundary）
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+**原则**：保持正向代理定位，优先保证邮件客户端与目标 SMTP 服务器之间的透明 TCP 转发。
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+**规则**：
+- 不得擅自修改客户端原有 SMTP 账号和服务器配置。
+- 明确当前阶段与后续扩展的边界，不提前引入未经批准的功能。
+- 不将 ICAP 作为核心依赖或默认产品能力。
+- 第一阶段仅实现 HTTP CONNECT 正向代理；SOCKS5、协议终止、MITM 均属非目标。
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+**理由**：产品定位是架构约束的起点。任何偏离透明转发原则的变更，必须先提出新的架构决策。
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+---
 
-## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+### II. 架构与依赖治理（Architecture & Dependency Governance）
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+**原则**：优先复用成熟、经过验证的 Go 组件；关键架构决策通过 ADR 管理并明确决策状态。
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**规则**：
+- 采用第三方依赖前，必须核实真实版本、接口能力、维护状态及关键扩展点。
+- 对 `github.com/emersion/go-smtp` 等已有依赖，必须核实仓库实际版本、使用方式和本地补丁；不得未经评估就替换或忽略。
+- 关键架构决策必须记录在 ADR 中，并标注决策状态（Proposed / Accepted / Deprecated）。
+- **Accepted ADR 必须遵守**。需要改变时，必须先提出新的架构决策并履行审核流程。
+- **Proposed ADR 不得被当作已批准的架构约束**，仅供评审参考。
+- 对 go-smtp 的本地源码修改，必须通过补丁文件记录，支持从上游可重现重建（见 ADR-001）。
+
+**理由**：依赖治理和 ADR 流程是技术债和架构退化的主要防线。已批准决策的稳定性直接影响系统可预测性。
+
+---
+
+### III. 流量采集与转发（Traffic Capture & Forwarding）
+
+**原则**：区分代理转发路径与流量观察路径；采集设计必须支持可配置的可靠性策略。
+
+**规则**：
+- 代理转发路径与流量观察路径必须分离，避免采集逻辑无意阻塞代理转发。
+- 流量策略必须支持"转发优先"（forwarding-priority）和"记录完整优先"（capture-completeness-priority）两种部署配置；具体行为遵循经批准的 ADR-002。
+- 采集设计必须考虑：队列容量、背压机制、失败处理、并发安全和资源回收。
+- TCP Read/Write 的边界**不等同于** SMTP 命令或消息边界；不得混淆二者。
+- 必须明确 SMTP 明文流量与 TLS 加密流量的采集边界：不得宣称能够直接解析未解密的 TLS 内容。
+- 流量采集分阶段实现；各阶段的目标、范围和非目标在对应的 Spec 和 ADR 中定义。
+
+**理由**：流量采集是 MailShield 的核心差异化能力。转发路径的健壮性是前提，采集的完整性是目标。二者通过独立路径实现，不相互阻塞。
+
+---
+
+### IV. 安全与资源保护（Security & Resource Protection）
+
+**原则**：默认考虑安全边界和资源限制；敏感数据受到保护；所有资源具有明确的生命周期。
+
+**规则**：
+- 必须考虑目标地址与端口访问控制、DNS 解析及目标校验，防止代理被滥用。
+- 认证凭证（AUTH PLAIN、LOGIN 等明文凭证）、邮件内容及其他敏感数据必须受到保护。
+- 日志默认遵循最小化与脱敏原则；不得在日志中记录明文凭证或未经脱敏的邮件内容。
+- 所有网络连接、缓冲区、队列和并发任务必须具有明确的资源限制及生命周期。
+- 必须考虑：超时、异常断连、上游失败、服务关闭和部分写入等场景。
+- **不得**引入无界队列、无限制连接或不受控的敏感信息记录。
+- AUTH 凭证过滤规则：默认过滤 AUTH PLAIN 命令行参数、AUTH LOGIN 用户名/密码行；无法识别的 AUTH 命令参数默认视为敏感并过滤。
+
+**理由**：正向代理是网络边界组件，安全性缺陷会直接影响邮件通信的保密性和完整性。
+
+---
+
+### V. 测试与质量（Testing & Quality）
+
+**原则**：核心网络功能必须具备自动化测试；测试结果必须真实可复现。
+
+**规则**：
+- 核心网络功能（TCP 转发、TLS 透传、HTTP CONNECT 代理）必须具备自动化单元测试与集成测试。
+- 测试必须覆盖：双向转发、连接失败、异常关闭、并发连接、资源限制和数据完整性。
+- 采集相关功能必须覆盖：队列满载、采集故障、策略差异及连接归属。
+- 涉及并发的变更必须执行 `go test -race` 并确保通过。
+- **不得**删除有效测试或绕过检查来制造通过结果；**不得**伪造测试结果。
+- 测试回归基线（ADR-001 保护的 13 项集成测试）构成技术基线，任何影响 SMTP 核心、TrafficObserver、TLS 或连接生命周期的变更必须运行全部回归测试。
+- 阶段是否完成，以经确认的验收标准和实际验证结果为准；不得仅凭代码已生成或单次测试通过就认定阶段完成。
+
+**理由**：测试是架构约束的验证机制。MailShield 的网络并发复杂度需要自动化测试保障正确性。
+
+---
+
+### VI. Spec-Driven Development 治理（Spec-Driven Development Governance）
+
+**原则**：严格遵循 Spec-Kit 工作流；每个功能阶段必须有明确的目标、范围和非目标。
+
+**规则**：
+- 严格遵循仓库实际采用的 Spec-Kit 版本与工作流（版本号随实际引入的版本更新，不锁定在此文档中）。
+- Spec 定义需求和验收标准；Plan 定义实施方案；Tasks 拆分实施工作；ADR 记录架构决策。
+- 开始 Plan 或编码前，**必须检查相关 Accepted ADR**。
+- 涉及架构、依赖、协议边界或关键安全策略的变更，**必须先**履行相应决策流程。
+- 每个功能阶段必须明确：目标、范围、非目标、依赖、验收标准和测试要求。
+- 需要用户审核的 Spec、Plan 或架构决策，**必须等待用户明确确认后才能继续**。
+- 不得仅凭代码已生成或单次测试通过就认定阶段完成。
+- Proposed ADR 不得被当作已批准的架构约束；Deprecated ADR 不得作为设计依据。
+
+**理由**：Spec-Kit 工作流确保需求→设计→实现→验证的完整可追溯性。阶段边界的明确性直接影响交付质量。
+
+---
+
+### VII. 文档与可维护性（Documentation & Maintainability）
+
+**原则**：**所有项目沟通、文档和代码注释必须使用中文**；文档必须与实际代码和已批准决策保持一致。
+
+**强制规则**：
+- **语言**：所有项目沟通（Issue、PR、评论）、项目文档（README、Spec、Plan、ADR、CHANGELOG）、**代码注释**，必须使用中文（简体普通话）。
+- 代码标识符（变量名、函数名、包名、文件名）遵循 Go 语言惯例（MixedCaps），不受此约束限制。
+- 文档必须与实际代码、依赖版本和已批准决策保持一致；发现不一致时必须报告。
+- 重大需求或架构变化必须同步检查相关 Spec、Plan、ADR 和测试。
+- 不得以"文档同步"或"代码重构"为由引入未批准的功能变更。
+- 长期文档（ADR、技术基线验证报告）必须记录版本和修订历史。
+
+**理由**：中文作为项目语言降低沟通成本；文档与代码的一致性是可维护性的基础。
+
+---
+
+## 三、治理规则
+
+### 章程优先级
+
+- Constitution 是项目治理的最高层；其约束高于代码惯例和开发习惯。
+- Accepted ADR 是经过正式决策的架构约束，其约束在 Constitution 之后、代码惯例之前。
+- Proposed ADR 是评审中的约束，仅供参考，不得作为设计依据。
+
+### 章程修订流程
+
+1. 提出修订：说明变更原因、影响范围和建议的新文本。
+2. 评审：与其他项目成员评审修订内容。
+3. 批准：获得明确确认后，新版本生效，旧版本归档。
+4. 同步：修订自动同步到相关模板（spec.md、plan.md 等）的页眉引用。
+
+### ADR 生命周期
+
+| 状态 | 含义 |
+|------|------|
+| Proposed | 正在评审，尚未批准，不得作为架构约束 |
+| Accepted | 正式批准，必须遵守 |
+| Deprecated | 已废弃，仅供历史参考 |
+
+### 复杂度与变更控制
+
+- 所有 PR 和代码审查必须验证对 Constitution 和 Accepted ADR 的合规性。
+- 引入新依赖或替换已有依赖，必须提出 ADR 并经过评审。
+- 复杂度必须有充分理由；不得以"方便实现"为由违反 Constitution 或 Accepted ADR 的约束。
+
+---
+
+**Version**: 1.0.0 | **Ratified**: 2026-10-15 | **Last Amended**: 2026-10-15
